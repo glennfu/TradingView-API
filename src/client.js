@@ -232,6 +232,10 @@ module.exports = class Client {
       origin: 'https://www.tradingview.com',
     });
 
+    // Set token and signature as public properties
+    this.token = clientOptions.token;
+    this.signature = clientOptions.signature;
+
     if (clientOptions.token) {
       misc.getUser(
         clientOptions.token,
@@ -273,6 +277,7 @@ module.exports = class Client {
   #clientBridge = {
     sessions: this.#sessions,
     send: (t, p) => this.send(t, p),
+    client: this,
   };
 
   /** @namespace Session */
@@ -290,5 +295,13 @@ module.exports = class Client {
       if (this.#ws.readyState) this.#ws.close();
       cb();
     });
+  }
+
+  // Public getter for the TradingView session cookie
+  get cookie() {
+    if (this.token && this.signature) {
+      return `sessionid=${this.token}; sessionid_sign=${this.signature}`;
+    }
+    return '';
   }
 };

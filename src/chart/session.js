@@ -1,3 +1,5 @@
+/* global fetch, FormData */
+
 const { genSessionID } = require('../utils');
 
 const studyConstructor = require('./study');
@@ -549,5 +551,247 @@ module.exports = (client) => class ChartSession {
     delete this.#client.sessions[this.#chartSessionID];
     delete this.#client.sessions[this.#replaySessionID];
     this.#replayMode = false;
+  }
+
+  /**
+   * Update an existing Pine script
+   * @param {string} scriptId The script ID (e.g. 'USER;d6c7c57dbe6f4e92c204f27dd475ae77')
+   * @param {string} scriptSource The new script source code
+   * @param {Object} [options] Update options
+   * @param {string} [options.name] New script name
+   * @param {boolean} [options.allowCreateNew=false] Allow creating a new version if needed
+   * @returns {Promise<string|null>} The new version number if successful, null otherwise
+   */
+  async updatePineScript(scriptId, scriptSource, options = {}) {
+    if (!scriptSource) {
+      throw new Error('Cannot save empty source code');
+    }
+
+    const urlParams = new URLSearchParams({
+      user_name: this.#client.client.userName || '',
+      allow_create_new: options.allowCreateNew ? 'true' : 'false',
+      script_id: scriptId,
+    });
+
+    if (options.name) {
+      urlParams.append('name', options.name);
+    }
+
+    try {
+      const response = await fetch(`https://pine-facade.tradingview.com/pine-facade/save/next/${encodeURIComponent(scriptId)}?${urlParams.toString()}`, {
+        method: 'POST',
+        headers: {
+          Accept: '*/*',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Origin: 'https://www.tradingview.com',
+          Referer: 'https://www.tradingview.com/',
+          Cookie: this.#client.client.cookie,
+        },
+        body: `source=${encodeURIComponent(scriptSource)}`,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      // Extract new version from pine.version
+      return result.result.metaInfo?.pine?.version || null;
+    } catch (error) {
+      this.#handleError('Failed to update Pine script:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get the content of a Pine script
+   * @param {string} scriptId The script ID
+   * @param {string} [version] The script version
+   * @param {Object} [options] Options
+   * @returns {Promise<string>} The script source code
+   */
+  async getPineScriptContent(scriptId, version, options = {}) {
+    try {
+      const urlParams = new URLSearchParams({
+        script_id: scriptId,
+      });
+      if (version) {
+        urlParams.append('version', version);
+      }
+
+      const response = await fetch(`https://pine-facade.tradingview.com/pine-facade/get/${encodeURIComponent(scriptId)}/${version || ''}?${urlParams.toString()}`, {
+        headers: {
+          Accept: '*/*',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Origin: 'https://www.tradingview.com',
+          Referer: 'https://www.tradingview.com/',
+          Cookie: this.#client.client.cookie,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result.source || null;
+    } catch (error) {
+      this.#handleError('Failed to get Pine script content:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * List Pine scripts
+   * @returns {Promise<Array<{id: string, name: string, description: string}>>} List of scripts
+   */
+  async listPineScripts(options = {}) {
+    try {
+      const urlParams = new URLSearchParams({
+        filter: 'saved',
+      });
+
+      const response = await fetch(`https://pine-facade.tradingview.com/pine-facade/list?${urlParams.toString()}`, {
+        headers: {
+          Accept: '*/*',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Origin: 'https://www.tradingview.com',
+          Referer: 'https://www.tradingview.com/',
+          Cookie: this.#client.client.cookie,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.map((script) => ({
+        id: script.scriptIdPart,
+        name: script.scriptName,
+        description: script.extra?.shortDescription || '',
+      }));
+    } catch (error) {
+      this.#handleError('Failed to list Pine scripts:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get the source code of a private Pine script by ID
+   * @param {string} scriptId The script ID
+   * @returns {Promise<string|null>} The script source code or null if not found
+   */
+  async getPrivateIndicatorSource(scriptId, options = {}) {
+    try {
+      const response = await fetch('https://pine-facade.tradingview.com/pine-facade/list?filter=saved', {
+        headers: {
+          Accept: '*/*',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Origin: 'https://www.tradingview.com',
+          Referer: 'https://www.tradingview.com/',
+          Cookie: this.#client.client.cookie,
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      const found = data.find((script) => script.scriptIdPart === scriptId);
+      return found ? found.scriptSource : null;
+    } catch (error) {
+      this.#handleError('Failed to get private indicator source:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Delete a Pine script by ID
+   * @param {string} scriptId The script ID
+   * @returns {Promise<boolean>} Whether the deletion was successful
+   */
+  async deletePineScript(scriptId, options = {}) {
+    try {
+      const userName = this.#client.client.userName || '';
+      const url = `https://pine-facade.tradingview.com/pine-facade/delete/${encodeURIComponent(scriptId)}?user_name=${encodeURIComponent(userName)}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Accept: '*/*',
+          Origin: 'https://www.tradingview.com',
+          Referer: 'https://www.tradingview.com/',
+          Cookie: this.#client.client.cookie,
+        },
+        body: null,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      // Accept both { success: true } and 'ok' as success
+      if (result === 'ok' || (result && result.success === true)) {
+        return true;
+      }
+      return false;
+    } catch (error) {
+      this.#handleError('Failed to delete Pine script:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Create a new Pine script
+   * @param {string} scriptSource The script source code
+   * @param {Object} [options] Create options
+   * @param {string} [options.name] Script name
+   * @param {boolean} [options.allowOverwrite=false] Allow overwriting existing script
+   * @returns {Promise<string|null>} The new script ID if successful, null otherwise
+   */
+  async createPineScript(scriptSource, options = {}) {
+    if (!scriptSource) {
+      throw new Error('Cannot save empty source code');
+    }
+
+    const urlParams = new URLSearchParams({
+      name: options.name || 'New Script',
+      user_name: this.#client.client.userName || '',
+      allow_overwrite: options.allowOverwrite ? 'true' : 'false',
+    });
+
+    const formData = new FormData();
+    formData.append('source', scriptSource);
+
+    try {
+      const response = await fetch(`https://pine-facade.tradingview.com/pine-facade/save/new?${urlParams.toString()}`, {
+        method: 'POST',
+        headers: {
+          Accept: '*/*',
+          Origin: 'https://www.tradingview.com',
+          Referer: 'https://www.tradingview.com/',
+          Cookie: this.#client.client.cookie,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      // Try to extract scriptId from metaInfo
+      if (result.result && result.result.metaInfo && result.result.metaInfo.scriptIdPart) {
+        return result.result.metaInfo.scriptIdPart;
+      }
+      if (result.scriptIdPart) {
+        return result.scriptIdPart;
+      }
+      return null;
+    } catch (error) {
+      this.#handleError('Failed to create Pine script:', error.message);
+      return null;
+    }
   }
 };
