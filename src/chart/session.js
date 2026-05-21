@@ -1,6 +1,11 @@
 const { genSessionID } = require('../utils');
 
 const studyConstructor = require('./study');
+const {
+  applySeriesBars,
+  isHistoryEnd,
+  isPriceSeriesKey,
+} = require('./seriesBars');
 
 /**
  * @typedef {'HeikinAshi' | 'Renko' | 'LineBreak' | 'Kagi' | 'PointAndFigure'
@@ -204,28 +209,17 @@ module.exports = (client) => class ChartSession {
         if (['timescale_update', 'du'].includes(packet.type)) {
           const changes = [];
 
-          Object.keys(packet.data[1]).forEach((k) => {
-            changes.push(k);
-            if (k === '$prices') {
-              const periods = packet.data[1].$prices;
-              if (!periods || !periods.s) return;
+          const payloads = [packet.data[1], packet.data[2]];
+          payloads.forEach((payload) => {
+            if (!payload || typeof payload !== 'object') return;
 
-              periods.s.forEach((p) => {
-                [this.#chartSession.indexes[p.i]] = p.v;
-                this.#periods[p.v[0]] = {
-                  time: p.v[0],
-                  open: p.v[1],
-                  close: p.v[4],
-                  max: p.v[2],
-                  min: p.v[3],
-                  volume: Math.round(p.v[5] * 100) / 100,
-                };
-              });
+            this.#ingestSeriesPayload(payload).forEach((k) => {
+              if (!changes.includes(k)) changes.push(k);
+            });
 
-              return;
-            }
-
-            if (this.#studyListeners[k]) this.#studyListeners[k](packet);
+            Object.keys(payload).forEach((k) => {
+              if (this.#studyListeners[k]) this.#studyListeners[k](packet);
+            });
           });
 
           this.#handleEvent('update', changes);
@@ -296,6 +290,55 @@ module.exports = (client) => class ChartSession {
 
   #currentSeries = 0;
 
+  /** @type {boolean} */
+  #historyExhausted = false;
+
+  /** Chart price series id (TradingView chart protocol uses sds_1). */
+  #pricesSeriesID = 'sds_1';
+
+  /** @return {string} Resolved symbol series id for the active market. */
+  #symbolSeriesID() {
+    return `sds_sym_${this.#currentSeries}`;
+  }
+
+  /**
+   * @param {Record<string, unknown>} payload
+   * @returns {string[]} Keys that changed in this payload
+   */
+  #ingestSeriesPayload(payload) {
+    const changes = [];
+
+    if (!payload || typeof payload !== 'object') return changes;
+    if (payload.index !== undefined && payload.changes) return changes;
+
+    Object.keys(payload).forEach((k) => {
+      if (!isPriceSeriesKey(k)) return;
+
+      const seriesData = payload[k];
+      if (!seriesData || typeof seriesData !== 'object') return;
+
+      if (isHistoryEnd(seriesData)) {
+        this.#historyExhausted = true;
+        changes.push(k);
+        return;
+      }
+
+      if (applySeriesBars(this.#chartSession.indexes, this.#periods, seriesData)) {
+        changes.push(k);
+      }
+    });
+
+    return changes;
+  }
+
+  /**
+   * True when TradingView has no more history for the current series.
+   * @returns {boolean}
+   */
+  get historyExhausted() {
+    return this.#historyExhausted;
+  }
+
   /**
    * @param {import('../types').TimeFrame} timeframe Chart period timeframe
    * @param {number} [range] Number of loaded periods/candles (Default: 100)
@@ -310,12 +353,13 @@ module.exports = (client) => class ChartSession {
     const calcRange = !reference ? range : ['bar_count', reference, range];
 
     this.#periods = {};
+    this.#historyExhausted = false;
 
     this.#client.send(`${this.#seriesCreated ? 'modify' : 'create'}_series`, [
       this.#chartSessionID,
-      '$prices',
+      this.#pricesSeriesID,
       's1',
-      `ser_${this.#currentSeries}`,
+      this.#symbolSeriesID(),
       timeframe,
       this.#seriesCreated ? '' : calcRange,
     ]);
@@ -340,6 +384,7 @@ module.exports = (client) => class ChartSession {
    */
   setMarket(symbol, options = {}) {
     this.#periods = {};
+    this.#historyExhausted = false;
 
     if (this.#replayMode) {
       this.#replayMode = false;
@@ -389,7 +434,7 @@ module.exports = (client) => class ChartSession {
 
     this.#client.send('resolve_symbol', [
       this.#chartSessionID,
-      `ser_${this.#currentSeries}`,
+      this.#symbolSeriesID(),
       `=${JSON.stringify(chartInit)}`,
     ]);
 
@@ -410,7 +455,89 @@ module.exports = (client) => class ChartSession {
    * @param {number} number Number of additional periods/candles you want to fetch
    */
   fetchMore(number = 1) {
-    this.#client.send('request_more_data', [this.#chartSessionID, '$prices', number]);
+    const count = Math.max(1, Math.floor(Number(number) || 1));
+    this.#client.send('request_more_data', [this.#chartSessionID, this.#pricesSeriesID, count]);
+  }
+
+  /**
+   * Request additional candles until at least `count` periods are loaded,
+   * or TradingView reports that history is exhausted.
+   * @param {number} count Target number of periods (newest-first in `periods`)
+   * @param {Object} [options] Options
+   * @param {number} [options.timeout=60000] Max wait in ms
+   * @param {number} [options.chunkSize=500] Bars to request per `request_more_data`
+   * @param {number} [options.maxRequests=50] Safety limit on pagination requests
+   * @returns {Promise<{ length: number, exhausted: boolean }>}
+   */
+  async ensurePeriodCount(count, options = {}) {
+    const target = Math.max(1, Math.floor(Number(count) || 1));
+    const timeout = options.timeout ?? 60000;
+    const chunkSize = options.chunkSize ?? 500;
+    const maxRequests = options.maxRequests ?? 50;
+    const deadline = Date.now() + timeout;
+
+    if (this.periods.length >= target) {
+      return { length: this.periods.length, exhausted: this.#historyExhausted };
+    }
+
+    let requests = 0;
+
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.#callbacks.update = this.#callbacks.update.filter((cb) => cb !== onUpdate);
+      };
+
+      const finish = () => {
+        cleanup();
+        resolve({
+          length: this.periods.length,
+          exhausted: this.#historyExhausted,
+        });
+      };
+
+      const fail = (err) => {
+        cleanup();
+        reject(err);
+      };
+
+      const timer = setTimeout(() => {
+        fail(new Error(`ensurePeriodCount: timeout after ${timeout}ms (${this.periods.length}/${target} periods)`));
+      }, timeout);
+
+      const onUpdate = () => {
+        if (Date.now() > deadline) {
+          fail(new Error(`ensurePeriodCount: timeout after ${timeout}ms (${this.periods.length}/${target} periods)`));
+          return;
+        }
+
+        if (this.periods.length >= target || this.#historyExhausted) {
+          finish();
+          return;
+        }
+
+        requestNext();
+      };
+
+      const requestNext = () => {
+        if (this.periods.length >= target || this.#historyExhausted) {
+          finish();
+          return;
+        }
+
+        if (requests >= maxRequests) {
+          fail(new Error(`ensurePeriodCount: maxRequests (${maxRequests}) exceeded`));
+          return;
+        }
+
+        const remaining = target - this.periods.length;
+        requests += 1;
+        this.fetchMore(Math.min(remaining, chunkSize));
+      };
+
+      this.#callbacks.update.push(onUpdate);
+      requestNext();
+    });
   }
 
   /**
@@ -477,7 +604,7 @@ module.exports = (client) => class ChartSession {
 
   /**
    * When a chart update happens
-   * @param {(changes: ('$prices' | string)[]) => void} cb
+   * @param {(changes: (string)[]) => void} cb
    * @event
    */
   onUpdate(cb) {

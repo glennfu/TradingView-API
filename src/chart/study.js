@@ -364,7 +364,7 @@ module.exports = (chartSession) => class ChartStudy {
       chartSession.sessionID,
       `${this.#studID}`,
       'st1',
-      '$prices',
+      'sds_1',
       this.instance.type,
       getInputs(this.instance),
     ]);
