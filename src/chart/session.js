@@ -6,6 +6,7 @@ const {
   isHistoryEnd,
   isPriceSeriesKey,
 } = require('./seriesBars');
+const { fetchMoreInBatches: runFetchMoreInBatches } = require('./pagination');
 
 /**
  * @typedef {'HeikinAshi' | 'Renko' | 'LineBreak' | 'Kagi' | 'PointAndFigure'
@@ -460,84 +461,30 @@ module.exports = (client) => class ChartSession {
   }
 
   /**
-   * Request additional candles until at least `count` periods are loaded,
-   * or TradingView reports that history is exhausted.
-   * @param {number} count Target number of periods (newest-first in `periods`)
-   * @param {Object} [options] Options
-   * @param {number} [options.timeout=60000] Max wait in ms
-   * @param {number} [options.chunkSize=500] Bars to request per `request_more_data`
-   * @param {number} [options.maxRequests=50] Safety limit on pagination requests
-   * @returns {Promise<{ length: number, exhausted: boolean }>}
+   * Paginate backward through chart history and yield new periods in batches.
+   * Uses large `fetchSize` wire requests (fast) and smaller `batchSize` yields (consumer-friendly).
+   *
+   * @param {number} number Target period count (load until at least this many exist on the chart)
+   * @param {Object} [options]
+   * @param {number} [options.batchSize=1000] Max periods per yielded batch
+   * @param {number} [options.fetchSize=3400] Bars per `request_more_data`. Browser HARs commonly
+   *   use ~3000–3400 per request; this default has performed well in practice (fast TV pagination).
+   * @param {number} [options.timeout=60000] Max wait in ms for the whole operation
+   * @param {number} [options.maxRequests=50] Safety limit on wire pagination requests
+   * @returns {AsyncGenerator<{ periods: PricePeriod[], meta: import('./pagination').FetchMoreInBatchesMeta }>}
    */
-  async ensurePeriodCount(count, options = {}) {
-    const target = Math.max(1, Math.floor(Number(count) || 1));
-    const timeout = options.timeout ?? 60000;
-    const chunkSize = options.chunkSize ?? 500;
-    const maxRequests = options.maxRequests ?? 50;
-    const deadline = Date.now() + timeout;
+  async *fetchMoreInBatches(number, options = {}) {
+    const bridge = {
+      getPeriods: () => this.periods,
+      getHistoryExhausted: () => this.#historyExhausted,
+      fetchMore: (count) => this.fetchMore(count),
+      onUpdate: (cb) => { this.#callbacks.update.push(cb); },
+      offUpdate: (cb) => {
+        this.#callbacks.update = this.#callbacks.update.filter((c) => c !== cb);
+      },
+    };
 
-    if (this.periods.length >= target) {
-      return { length: this.periods.length, exhausted: this.#historyExhausted };
-    }
-
-    let requests = 0;
-
-    return new Promise((resolve, reject) => {
-      const cleanup = () => {
-        clearTimeout(timer);
-        this.#callbacks.update = this.#callbacks.update.filter((cb) => cb !== onUpdate);
-      };
-
-      const finish = () => {
-        cleanup();
-        resolve({
-          length: this.periods.length,
-          exhausted: this.#historyExhausted,
-        });
-      };
-
-      const fail = (err) => {
-        cleanup();
-        reject(err);
-      };
-
-      const timer = setTimeout(() => {
-        fail(new Error(`ensurePeriodCount: timeout after ${timeout}ms (${this.periods.length}/${target} periods)`));
-      }, timeout);
-
-      const onUpdate = () => {
-        if (Date.now() > deadline) {
-          fail(new Error(`ensurePeriodCount: timeout after ${timeout}ms (${this.periods.length}/${target} periods)`));
-          return;
-        }
-
-        if (this.periods.length >= target || this.#historyExhausted) {
-          finish();
-          return;
-        }
-
-        requestNext();
-      };
-
-      const requestNext = () => {
-        if (this.periods.length >= target || this.#historyExhausted) {
-          finish();
-          return;
-        }
-
-        if (requests >= maxRequests) {
-          fail(new Error(`ensurePeriodCount: maxRequests (${maxRequests}) exceeded`));
-          return;
-        }
-
-        const remaining = target - this.periods.length;
-        requests += 1;
-        this.fetchMore(Math.min(remaining, chunkSize));
-      };
-
-      this.#callbacks.update.push(onUpdate);
-      requestNext();
-    });
+    yield* runFetchMoreInBatches(bridge, number, options);
   }
 
   /**

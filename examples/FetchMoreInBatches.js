@@ -1,8 +1,7 @@
 const TradingView = require('../main');
 
 /**
- * This example loads BINANCE:BTCEUR 15m candles and paginates backward
- * until at least 200 periods are available (or history ends).
+ * Paginate with large wire pages (fetchSize) and consume in smaller batches (batchSize).
  */
 
 const client = new TradingView.Client();
@@ -21,12 +20,24 @@ chart.onError((...err) => {
 chart.onSymbolLoaded(async () => {
   console.log(`Market "${chart.infos.description}" loaded (${chart.periods.length} periods)`);
 
-  const { length, exhausted } = await chart.ensurePeriodCount(200, {
-    timeout: 30000,
-    chunkSize: 100,
-  });
+  let batchNum = 0;
+  let totalNew = 0;
 
-  console.log(`Loaded ${length} periods (history exhausted: ${exhausted})`);
+  for await (const { periods, meta } of chart.fetchMoreInBatches(200, {
+    batchSize: 50,
+    fetchSize: 100,
+    timeout: 30000,
+    maxRequests: 50,
+  })) {
+    batchNum += 1;
+    totalNew += periods.length;
+    console.log(
+      `batch #${batchNum} request=${meta.requestIndex} periods=${periods.length} ` +
+      `exhausted=${meta.exhausted} grew=${meta.grew}${meta.stallReason ? ` stall=${meta.stallReason}` : ''}`,
+    );
+  }
+
+  console.log(`Done: ${chart.periods.length} on chart, ${totalNew} new across batches, exhausted=${chart.historyExhausted}`);
 
   if (chart.periods.length > 0) {
     const oldest = chart.periods[chart.periods.length - 1];

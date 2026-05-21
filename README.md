@@ -61,6 +61,24 @@ Last version:
 npm i github:Mathieu2301/TradingView-API
 ```
 
+## Chart history pagination
+
+| API | Use when |
+|-----|----------|
+| `chart.fetchMore(n)` | One wire request for `n` older bars; you handle `onUpdate` and stopping yourself. |
+| `chart.fetchMoreInBatches(target, options?)` | Load until the chart has at least `target` periods (or history ends), with large wire pages and smaller yielded batches. |
+
+`fetchMoreInBatches` options (defaults tuned for fast TV + slow DB sinks):
+
+- `fetchSize` (default **3400**) — bars per `request_more_data` (browser HARs often use ~3000–3400).
+- `batchSize` (default **1000**) — max new periods per `yield`.
+- `timeout` (default **60000**) — whole-operation deadline in ms.
+- `maxRequests` (default **50**) — safety cap on wire requests.
+
+Stops when the target count is met, `historyExhausted` is set, or a page returns no new periods (`meta.stallReason: 'no_new_periods'`).
+
+See `examples/FetchMoreInBatches.js` and `tests/pagination.test.ts`.
+
 ## Examples
 
 You can find all the examples and snippets in `./examples` folder.

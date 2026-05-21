@@ -39,19 +39,28 @@ describe('Chart pagination', () => {
     expect(chart.periods.length).toBeGreaterThan(before);
   });
 
-  it('loads up to a target count with ensurePeriodCount', async () => {
+  it('loads up to a target count with fetchMoreInBatches', async () => {
     const target = 200;
     const beforeEnsure = chart.periods.length;
+    let batchCount = 0;
+    let yielded = 0;
 
-    const result = await chart.ensurePeriodCount(target, {
+    for await (const { periods, meta } of chart.fetchMoreInBatches(target, {
       timeout: 30000,
-      chunkSize: 100,
-    });
+      batchSize: 50,
+      fetchSize: 100,
+    })) {
+      batchCount += 1;
+      yielded += periods.length;
+      if (meta.exhausted) break;
+    }
 
-    expect(result.length).toBeGreaterThanOrEqual(beforeEnsure);
+    expect(chart.periods.length).toBeGreaterThanOrEqual(beforeEnsure);
+    expect(batchCount).toBeGreaterThan(0);
+    expect(yielded).toBeGreaterThan(0);
 
-    if (!result.exhausted) {
-      expect(result.length).toBeGreaterThanOrEqual(target);
+    if (!chart.historyExhausted) {
+      expect(chart.periods.length).toBeGreaterThanOrEqual(target);
     }
   });
 
