@@ -21,9 +21,6 @@ chart.onSymbolLoaded(async () => {
 
   for await (const { periods, meta } of chart.fetchMoreInBatches(200, {
     batchSize: 50,
-    fetchSize: 100,
-    timeout: 30000,
-    maxRequests: 50,
   })) {
     batchNum += 1;
     totalNew += periods.length;
