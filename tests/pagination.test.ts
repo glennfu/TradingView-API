@@ -1,24 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { fetchMoreInBatches, chunkPeriods } from '../src/chart/pagination';
+import { fetchMoreInBatches } from '../src/chart/pagination';
 
 describe('pagination helpers', () => {
-  it('chunks periods into batchSize slices', () => {
-    const periods = [1, 2, 3, 4, 5].map((time) => ({
-      time,
-      open: 1,
-      close: 1,
-      max: 1,
-      min: 1,
-      volume: 1,
-    }));
-
-    expect(chunkPeriods(periods, 2)).toEqual([
-      periods.slice(0, 2),
-      periods.slice(2, 4),
-      periods.slice(4, 5),
-    ]);
-  });
-
   it('yields batches and stops when target count is met', async () => {
     let periods = [
       { time: 100, open: 1, close: 1, max: 1, min: 1, volume: 1 },

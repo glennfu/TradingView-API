@@ -8,7 +8,7 @@ function applySeriesBars(indexes, periods, seriesData) {
   if (!seriesData || !seriesData.s || !seriesData.s.length) return false;
 
   seriesData.s.forEach((p) => {
-    [indexes[p.i]] = p.v;
+    indexes[p.i] = p.v[0];
     periods[p.v[0]] = {
       time: p.v[0],
       open: p.v[1],

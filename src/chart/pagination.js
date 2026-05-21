@@ -36,10 +36,10 @@
  * Wait for chart `onUpdate` after a wire fetch: growth, history exhausted, or deadline.
  * @param {ChartPaginationBridge} chart
  * @param {number} beforeCount
- * @param {number} deadlineMs
+ * @param {number} deadlineAtMs Absolute deadline (ms since epoch)
  * @returns {Promise<{ grew: boolean, exhausted: boolean, timedOut?: boolean }>}
  */
-function waitForPage(chart, beforeCount, deadlineMs) {
+function waitForPage(chart, beforeCount, deadlineAtMs) {
   return new Promise((resolve) => {
     let settled = false;
 
@@ -71,7 +71,7 @@ function waitForPage(chart, beforeCount, deadlineMs) {
         exhausted: chart.getHistoryExhausted(),
         timedOut: true,
       });
-    }, Math.max(1, deadlineMs - Date.now()));
+    }, Math.max(1, deadlineAtMs - Date.now()));
 
     chart.onUpdate(onUpdate);
   });
@@ -178,6 +178,4 @@ async function* fetchMoreInBatches(chart, number, options = {}) {
 
 module.exports = {
   fetchMoreInBatches,
-  waitForPage,
-  chunkPeriods,
 };

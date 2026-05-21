@@ -1,9 +1,5 @@
 const TradingView = require('../main');
 
-/**
- * Paginate with large wire pages (fetchSize) and consume in smaller batches (batchSize).
- */
-
 const client = new TradingView.Client();
 
 const chart = new client.Session.Chart();
