@@ -1,11 +1,6 @@
 const { genSessionID } = require('../utils');
 
 const studyConstructor = require('./study');
-const {
-  applySeriesBars,
-  isHistoryEnd,
-  isPriceSeriesKey,
-} = require('./seriesBars');
 const { fetchMoreInBatches: runFetchMoreInBatches } = require('./pagination');
 
 /**
@@ -210,18 +205,44 @@ module.exports = (client) => class ChartSession {
         if (['timescale_update', 'du'].includes(packet.type)) {
           const changes = [];
 
-          const payloads = [packet.data[1], packet.data[2]];
-          payloads.forEach((payload) => {
-            if (!payload || typeof payload !== 'object') return;
+          const mergePriceSeries = (series) => {
+            if (!series) return;
+            if (series.s && series.s.length === 0 && series.ns) {
+              this.#historyExhausted = true;
+              return;
+            }
+            if (!series.s) return;
 
-            this.#ingestSeriesPayload(payload).forEach((k) => {
-              if (!changes.includes(k)) changes.push(k);
+            series.s.forEach((p) => {
+              [this.#chartSession.indexes[p.i]] = p.v;
+              this.#periods[p.v[0]] = {
+                time: p.v[0],
+                open: p.v[1],
+                close: p.v[4],
+                max: p.v[2],
+                min: p.v[3],
+                volume: Math.round(p.v[5] * 100) / 100,
+              };
             });
+          };
 
-            Object.keys(payload).forEach((k) => {
-              if (this.#studyListeners[k]) this.#studyListeners[k](packet);
-            });
+          Object.keys(packet.data[1]).forEach((k) => {
+            changes.push(k);
+            if (k === '$prices' || k === 'sds_1') {
+              mergePriceSeries(packet.data[1][k]);
+              return;
+            }
+
+            if (this.#studyListeners[k]) this.#studyListeners[k](packet);
           });
+
+          if (packet.data[2] && typeof packet.data[2] === 'object') {
+            Object.keys(packet.data[2]).forEach((k) => {
+              if (k !== '$prices' && k !== 'sds_1') return;
+              if (!changes.includes(k)) changes.push(k);
+              mergePriceSeries(packet.data[2][k]);
+            });
+          }
 
           this.#handleEvent('update', changes);
           return;
@@ -294,44 +315,6 @@ module.exports = (client) => class ChartSession {
   /** @type {boolean} */
   #historyExhausted = false;
 
-  /** Chart price series id (TradingView chart protocol uses sds_1). */
-  #pricesSeriesID = 'sds_1';
-
-  /** @return {string} Resolved symbol series id for the active market. */
-  #symbolSeriesID() {
-    return `sds_sym_${this.#currentSeries}`;
-  }
-
-  /**
-   * @param {Record<string, unknown>} payload
-   * @returns {string[]} Keys that changed in this payload
-   */
-  #ingestSeriesPayload(payload) {
-    const changes = [];
-
-    if (!payload || typeof payload !== 'object') return changes;
-    if (payload.index !== undefined && payload.changes) return changes;
-
-    Object.keys(payload).forEach((k) => {
-      if (!isPriceSeriesKey(k)) return;
-
-      const seriesData = payload[k];
-      if (!seriesData || typeof seriesData !== 'object') return;
-
-      if (isHistoryEnd(seriesData)) {
-        this.#historyExhausted = true;
-        changes.push(k);
-        return;
-      }
-
-      if (applySeriesBars(this.#chartSession.indexes, this.#periods, seriesData)) {
-        changes.push(k);
-      }
-    });
-
-    return changes;
-  }
-
   /**
    * True when TradingView has no more history for the current series.
    * @returns {boolean}
@@ -358,9 +341,9 @@ module.exports = (client) => class ChartSession {
 
     this.#client.send(`${this.#seriesCreated ? 'modify' : 'create'}_series`, [
       this.#chartSessionID,
-      this.#pricesSeriesID,
+      'sds_1',
       's1',
-      this.#symbolSeriesID(),
+      `ser_${this.#currentSeries}`,
       timeframe,
       this.#seriesCreated ? '' : calcRange,
     ]);
@@ -435,7 +418,7 @@ module.exports = (client) => class ChartSession {
 
     this.#client.send('resolve_symbol', [
       this.#chartSessionID,
-      this.#symbolSeriesID(),
+      `ser_${this.#currentSeries}`,
       `=${JSON.stringify(chartInit)}`,
     ]);
 
@@ -456,8 +439,7 @@ module.exports = (client) => class ChartSession {
    * @param {number} number Number of additional periods/candles you want to fetch
    */
   fetchMore(number = 1) {
-    const count = Math.max(1, Math.floor(Number(number) || 1));
-    this.#client.send('request_more_data', [this.#chartSessionID, this.#pricesSeriesID, count]);
+    this.#client.send('request_more_data', [this.#chartSessionID, 'sds_1', number]);
   }
 
   /**
@@ -551,7 +533,7 @@ module.exports = (client) => class ChartSession {
 
   /**
    * When a chart update happens
-   * @param {(changes: (string)[]) => void} cb
+   * @param {(changes: ('$prices' | 'sds_1' | string)[]) => void} cb
    * @event
    */
   onUpdate(cb) {

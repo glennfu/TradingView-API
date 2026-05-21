@@ -40,7 +40,7 @@ describe('AllErrors', () => {
     console.log('=> Chart error:', error);
 
     expect(error).toBeDefined();
-    expect(error[0]).toBe('(sds_sym_1) Symbol error:');
+    expect(error[0]).toBe('(ser_1) Symbol error:');
     expect(error[1]).toBe('invalid symbol');
     expect(error.length).toBe(2);
   });
@@ -112,7 +112,7 @@ describe('AllErrors', () => {
     expect(error).toBeDefined();
     expect(error[0]).toBe('Critical error:');
     expect(error[1]).toBe('invalid parameters');
-    expect(error[2]).toBe('method: create_series. args: "[sds_1, s1, sds_sym_1, XX, 100]"');
+    expect(error[2]).toBe('method: create_series. args: "[sds_1, s1, ser_1, XX, 100]"');
     expect(error.length).toBe(3);
   });
 
