@@ -292,12 +292,18 @@ module.exports = {
       throw new Error(`Inexistent or unsupported indicator: "${data.reason}"`);
     }
 
-    // Since 2026-10-27 pine-facade sends the compiled script only as the hidden "text" input's defval,
-    // not as result.ilTemplate (upstream #354). Without it every study fails "Can't parse pine".
-    const script = data.result.ilTemplate
-      || data.result.metaInfo.inputs.find((input) => input.id === 'text')?.defval;
-    if (typeof script !== 'string' || !script) {
-      throw new Error(`No compiled script for indicator "${indicID}": neither ilTemplate nor the "text" input`);
+    // pine-facade keeps moving the compiled script: result.ilTemplate until 2026-10-27,
+    // then the hidden "text" input's defval (upstream #354), and since 2026-10-30 only
+    // metaInfo.defaults.inputs.text. Without it every study fails "Can't parse pine".
+    const { metaInfo } = data.result;
+    const script = [
+      data.result.ilTemplate,
+      metaInfo.inputs.find((input) => input.id === 'text')?.defval,
+      metaInfo.defaults?.inputs?.text,
+    ].find((s) => typeof s === 'string' && s);
+    if (!script) {
+      throw new Error(`No compiled script for indicator "${indicID}": `
+        + 'not in ilTemplate, the "text" input or defaults.inputs.text');
     }
 
     const inputs = {};
